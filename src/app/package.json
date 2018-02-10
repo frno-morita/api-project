@@ -1,0 +1,12 @@
+{
+  "name": "apiproject",
+  "version": "1.0.0",
+  "description": "A simple api project based on nodejs and express",
+  "main": "app.js",
+  "author": "Fredrik Nordlund",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.16.2",
+    "express-redis-cache": "^1.0.0"
+  }
+}

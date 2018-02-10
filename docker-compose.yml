@@ -1,0 +1,25 @@
+version: '3'
+services:
+  api:
+    build: ./docker/app
+    image: "apiproject"
+    volumes:
+      - ${PWD}/src/app:/var/www/html
+    ports:
+      - 4711:4711
+    depends_on:
+      - "yarn"
+      - "redis"
+    links:
+      - redis:redis
+
+  yarn:
+    build: ./docker/yarn
+    image: "yarn"
+    volumes:
+      - ${PWD}/src/app:/app
+
+  redis:
+    image: redis:latest
+    ports:
+      - 26379:6379
