@@ -1,17 +1,9 @@
 var express = require('express');
-var compression = require('compression');
 var app = express();
+var compression = require('compression');
 var index = require('./routes/artist');
-var cache = require('express-redis-cache')({
-    host: 'redis'
-});
 
 app.use(compression());
 app.use('/', index);
 
-/*app.get('/:mbId',
-    cache.route(),
-    (req, res) => res.send('Hello World 2')
-);*/
-
-app.listen(4711, () => console.log('Example app listening on port 80!'));
+app.listen(80, () => console.log('Api-project app is now listening on port 80.'));

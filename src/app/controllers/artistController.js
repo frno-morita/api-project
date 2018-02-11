@@ -57,22 +57,31 @@ function wikipediaApiCall(id) {
             });
 
             res.on('close', () => {
-                reject({status: 500});
+                resolve({status: 500, type: 'wikipedia', error: "Socket closed for wikipedia"});
             });
 
             res.on('end', () => {
                 if (res.statusCode < 399) {
-                    resolve({status: 200, data: data});
+                    let wikiData = JSON.parse(data);
+                    let description = '';
+                    if (wikiData && wikiData.query && wikiData.query.pages) {
+                        for (let page in wikiData.query.pages) {
+                            description = wikiData.query.pages[page].extract;
+                            break;
+                        }
+                    }
+                    resolve({status: 200, type: 'wikipedia', data: description});
                 } else {
-                    reject({status: 500});
+                    resolve({status: 500, type: 'wikipedia', data: data});
                 }
             });
         }).on('error', (e) => {
-            reject({status: 500, error: e.message});
+            resolve({status: 500, type: 'wikipedia', error: e.message});
         });
     });
 }
 
+// HTTPS Get wrapper that can handle redirects
 function httpsGet(uri, resolve, reject, object) {
     let data = '';
 
@@ -82,30 +91,25 @@ function httpsGet(uri, resolve, reject, object) {
         });
 
         res.on('close', () => {
-            object.images = [];
-            reject({status: 500, error: "Socket closed", data: object});
+            resolve({status: 500, type: 'coverartarchive', error: "Socket closed", data: object});
         });
     
         res.on('end', () => {
             if (res.statusCode < 300) {
                 let images = JSON.parse(data);
-                let arr = [];
                 for (let i = 0; i < images.images.length; i++) {
-                    arr.push(images.images[i].image);
+                    object.images.push(images.images[i].image);
                 }
-                object.images = arr;
-                resolve({status: 200, data: object});
+                resolve({status: 200, type: 'coverartarchive', data: object});
             } else if (res.statusCode < 399 && res.headers.location) {
                 httpsGet(res.headers.location, resolve, reject, object);
             } else {
-                object.images = [];
-                resolve({status: 500, statusCode: res.statusCode, uri: uri, data: object});
+                resolve({status: 500, type: 'coverartarchive', statusCode: res.statusCode, uri: uri, data: object});
             }
         });
 
     }).on('error', (e) => {
-        object.images = [];
-        resolve({status: 500, error: e.message, data: object});
+        resolve({status: 500, type: 'coverartarchive', error: e.message, data: object});
     });
 }
 
@@ -128,24 +132,24 @@ function coverArtArchiveApiCall(mbid, object) {
             });
 
             res.on('close', () => {
-                object.images = [];
-                resolve({status: 500, error: "socket closed", data: object});
+                resolve({status: 500, type: 'coverartarchive', error: "socket closed", data: object});
             });
 
             res.on('end', () => {
                 if (res.statusCode < 300) {
-                    object.data = data;
-                    resolve({status: 200, data: object});
+                    let images = JSON.parse(data);
+                    for (let i = 0; i < images.images.length; i++) {
+                        object.images.push(images.images[i].image);
+                    }
+                    resolve({status: 200, type: 'coverartarchive', data: object});
                 } else if (res.statusCode < 399 && res.headers.location) {
                     httpsGet(res.headers.location, resolve, reject, object);
                 } else {
-                    object.images = [];
-                    resolve({status: 500, statusCode: res.statusCode, uri: options.path, data: object});
+                    resolve({status: 500, type: 'coverartarchive', statusCode: res.statusCode, uri: options.path, data: object});
                 }
             });
         }).on('error', (e) => {
-            object.images = [];
-            resolve({status: 500, error: e, data: object});
+            resolve({status: 500, type: 'coverartarchive', error: e, data: object});
         });
     });
 }
@@ -165,33 +169,45 @@ function generatePromises(data) {
             }
         }
 
-        for (let j = json['release-groups'].length; j > 0; --j) {
+        for (let j = json['release-groups'].length - 1; j >= 0; j--) {
             if (json['release-groups'][j]) {
                 ret.push(coverArtArchiveApiCall(json['release-groups'][j].id, {
                     "title": json['release-groups'][j].title,
-                    "id": json['release-groups'][j].id
+                    "id": json['release-groups'][j].id,
+                    "images": []
                 }));
             }
         }
 
     } catch (e) {
         return [new Promise((resolve, reject) => {
-            reject();
+            reject(e);
         })];
     }
 
-    return ret;
+    if (!ret.length) {
+        return [new Promise((resolve, reject) => {
+            reject(e);
+        })];
+    } else {
+        return ret;
+    }
 }
 
 // Take the result from all API calls and generate
 // the final JSON we will send back to the client
 function prepareResultData(mbid, data) {
-    let wikiDescription = data[0];
+    let wikiDescription = '';
     let albums = [];
 
-    for (let i = 1; i < data.length; i++) {
-        albums.push(data[i].data);
+    for (let i = 0; i < data.length; i++) {
+        if (data[i].type === 'wikipedia') {
+            wikiDescription = data[i].data;
+        } else if (data[i].type === 'coverartarchive') {
+            albums.push(data[i].data);
+        }
     }
+
     return {
         "mbid": mbid,
         "description": wikiDescription,
@@ -205,25 +221,25 @@ exports.not_implemented = (req, res) => res.status(501).send({error: req.method 
 // Retrieve detail information about specific artist
 // This is what we will be implementing later in the assignment
 exports.artist_detail = (req, res) => {
+    // Set response header content-type since we
+    // always send back a JSON in the response
+    res.setHeader('content-type', 'application/json'); 
+    // Start API chain
     musicbrainzApiCall(req.params.id).then((data) => {
         if (data.status === 200) {
             try {
                 Promise.all(generatePromises(data.data)).then(results => {
-                    console.log('RESULTS: ', results);
-                    res.setHeader('content-type', 'application/json');
                     res.status(200).send(prepareResultData(req.params.id, results));  
                 }).catch((error) => {
-                    console.log('ONE OF THEM SCREWED UP! ', error);
                     res.status(500).send({error: error});
                 });
             } catch (e) {
                 res.status(500).send({error: e});
             }
         } else {
-            res.setHeader('content-type', 'application/json');
             res.status(data.status).send(data.data);
         }
-    }).catch((error) => {
-        res.status(500).send({error: error});
+    }).catch((e) => {
+        res.status(500).send({error: e});
     });
 }
