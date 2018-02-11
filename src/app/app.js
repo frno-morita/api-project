@@ -1,10 +1,12 @@
 var express = require('express');
+var compression = require('compression');
 var app = express();
 var index = require('./routes/artist');
 var cache = require('express-redis-cache')({
     host: 'redis'
 });
 
+app.use(compression());
 app.use('/', index);
 
 /*app.get('/:mbId',

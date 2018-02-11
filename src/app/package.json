@@ -6,6 +6,7 @@
   "author": "Fredrik Nordlund",
   "license": "MIT",
   "dependencies": {
+    "compression": "^1.7.1",
     "express": "^4.16.2",
     "express-redis-cache": "^1.0.0"
   }
