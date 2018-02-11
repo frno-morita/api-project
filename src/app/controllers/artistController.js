@@ -1,4 +1,3 @@
-//const http = require('http');
 const https = require('https');
  
 // Generate Promise that will call the Musicbrainz API
@@ -26,8 +25,8 @@ function musicbrainzApiCall(mbid) {
             res.on('end', () => {
                 if (res.statusCode < 399) {
                     resolve({status: 200, data: data});
-                } else if (res.statusCode === 400) {
-                    resolve({status: 400, data: data});
+                } else if (res.statusCode < 499) {
+                    resolve({status: res.statusCode, data: data});
                 } else {
                     reject({status: 500});
                 }
@@ -52,38 +51,66 @@ function wikipediaApiCall(id) {
             }
         };
 
-        console.log(options);
-
         https.get(options, (res) => {
             res.on('data', (body) => {
                 data += body;
             });
 
             res.on('close', () => {
-                console.log('closed');
                 reject({status: 500});
             });
 
             res.on('end', () => {
                 if (res.statusCode < 399) {
-                    console.log('response: ', res);
-                    console.log('data: ', data);
                     resolve({status: 200, data: data});
                 } else {
-                    console.log('response: ', res);
-                    console.log('data: ', data);
                     reject({status: 500});
                 }
             });
         }).on('error', (e) => {
-            console.log('error: ', e.message);
             reject({status: 500, error: e.message});
         });
     });
 }
 
+function httpsGet(uri, resolve, reject, object) {
+    let data = '';
+
+    https.get(uri, (res) => {
+        res.on('data', (body) => {
+            data += body;
+        });
+
+        res.on('close', () => {
+            object.images = [];
+            reject({status: 500, error: "Socket closed", data: object});
+        });
+    
+        res.on('end', () => {
+            if (res.statusCode < 300) {
+                let images = JSON.parse(data);
+                let arr = [];
+                for (let i = 0; i < images.images.length; i++) {
+                    arr.push(images.images[i].image);
+                }
+                object.images = arr;
+                resolve({status: 200, data: object});
+            } else if (res.statusCode < 399 && res.headers.location) {
+                httpsGet(res.headers.location, resolve, reject, object);
+            } else {
+                object.images = [];
+                resolve({status: 500, statusCode: res.statusCode, uri: uri, data: object});
+            }
+        });
+
+    }).on('error', (e) => {
+        object.images = [];
+        resolve({status: 500, error: e.message, data: object});
+    });
+}
+
 // Generate Promise that will call the CoverartArchive API
-function coverArtArchiveApiCall(mbid) {
+function coverArtArchiveApiCall(mbid, object) {
     return new Promise((resolve, reject) => {
         let data = '';
         let options = {
@@ -101,18 +128,24 @@ function coverArtArchiveApiCall(mbid) {
             });
 
             res.on('close', () => {
-                reject({status: 500});
+                object.images = [];
+                resolve({status: 500, error: "socket closed", data: object});
             });
 
             res.on('end', () => {
-                if (res.statusCode < 399) {
-                    resolve({status: 200, data: data});
+                if (res.statusCode < 300) {
+                    object.data = data;
+                    resolve({status: 200, data: object});
+                } else if (res.statusCode < 399 && res.headers.location) {
+                    httpsGet(res.headers.location, resolve, reject, object);
                 } else {
-                    reject({status: 500});
+                    object.images = [];
+                    resolve({status: 500, statusCode: res.statusCode, uri: options.path, data: object});
                 }
             });
         }).on('error', (e) => {
-            reject({status: 500}); 
+            object.images = [];
+            resolve({status: 500, error: e, data: object});
         });
     });
 }
@@ -124,19 +157,25 @@ function generatePromises(data) {
     
     try {
         let json = JSON.parse(data);
-        console.log(json);
         for (let i = json.relations.length; i > 0; --i) {
-            console.log(json.relations[i]);
             if (json.relations[i] && json.relations[i].type && json.relations[i].type === 'wikipedia') {
                 let arr = (json.relations[i].url.resource).split('/');
-                console.log(arr);
                 ret.push(wikipediaApiCall(arr[arr.length - 1]));
                 break;
             }
         }
+
+        for (let j = json['release-groups'].length; j > 0; --j) {
+            if (json['release-groups'][j]) {
+                ret.push(coverArtArchiveApiCall(json['release-groups'][j].id, {
+                    "title": json['release-groups'][j].title,
+                    "id": json['release-groups'][j].id
+                }));
+            }
+        }
+
     } catch (e) {
         return [new Promise((resolve, reject) => {
-            console.log(e.message);
             reject();
         })];
     }
@@ -146,10 +185,18 @@ function generatePromises(data) {
 
 // Take the result from all API calls and generate
 // the final JSON we will send back to the client
-function prepareResultData(data) {
-    console.log("Preparing data");
-    console.log(data);
-    return {data: data};
+function prepareResultData(mbid, data) {
+    let wikiDescription = data[0];
+    let albums = [];
+
+    for (let i = 1; i < data.length; i++) {
+        albums.push(data[i].data);
+    }
+    return {
+        "mbid": mbid,
+        "description": wikiDescription,
+        "albums": albums
+    };
 }
 
 // Send back not implemented status
@@ -162,19 +209,21 @@ exports.artist_detail = (req, res) => {
         if (data.status === 200) {
             try {
                 Promise.all(generatePromises(data.data)).then(results => {
+                    console.log('RESULTS: ', results);
                     res.setHeader('content-type', 'application/json');
-                    res.status(200).send(prepareResultData(results));  
+                    res.status(200).send(prepareResultData(req.params.id, results));  
                 }).catch((error) => {
-                    res.sendStatus(500);
+                    console.log('ONE OF THEM SCREWED UP! ', error);
+                    res.status(500).send({error: error});
                 });
             } catch (e) {
-                res.sendStatus(500);
+                res.status(500).send({error: e});
             }
         } else {
             res.setHeader('content-type', 'application/json');
             res.status(data.status).send(data.data);
         }
     }).catch((error) => {
-        res.sendStatus(error.status);
+        res.status(500).send({error: error});
     });
 }
